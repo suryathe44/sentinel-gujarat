@@ -14,5 +14,3 @@ services:
         value: "1"
       - key: YOLO_MODEL
         value: yolov8n.pt
-      - key: VIDEO_SOURCE
-        sync: false
