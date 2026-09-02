@@ -7,9 +7,8 @@ import threading
 import time
 from datetime import datetime, timezone
 
-import cv2
-import numpy as np
 from flask import Flask, Response, jsonify, render_template_string
+from PIL import Image, ImageDraw, ImageFont
 
 app = Flask(__name__)
 state_lock = threading.Lock()
@@ -59,13 +58,18 @@ PAGE = r"""
 
 
 def placeholder_frame(message: str) -> bytes:
-    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
-    frame[:] = (17, 27, 40)
-    cv2.putText(frame, "SENTINEL GUJARAT", (70, 120), cv2.FONT_HERSHEY_DUPLEX, 1.7, (231, 214, 54), 3)
-    cv2.putText(frame, message, (70, 330), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (235, 242, 247), 2)
-    cv2.putText(frame, "Set VIDEO_SOURCE in Render to an RTSP URL or video URL", (70, 385), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (155, 178, 197), 2)
-    ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 82])
-    return encoded.tobytes() if ok else b""
+    from io import BytesIO
+
+    frame = Image.new("RGB", (1280, 720), (17, 27, 40))
+    draw = ImageDraw.Draw(frame)
+    font = ImageFont.load_default(size=42)
+    small = ImageFont.load_default(size=24)
+    draw.text((70, 90), "SENTINEL GUJARAT", fill=(54, 214, 231), font=font)
+    draw.text((70, 315), message, fill=(235, 242, 247), font=small)
+    draw.text((70, 370), "Configure a secure edge camera to begin analytics", fill=(155, 178, 197), font=small)
+    output = BytesIO()
+    frame.save(output, format="JPEG", quality=82)
+    return output.getvalue()
 
 
 def analytics_worker() -> None:
@@ -80,6 +84,7 @@ def analytics_worker() -> None:
     # Heavy AI dependencies are imported only when a camera is configured. This
     # keeps the public control-plane dashboard small enough for Render Free.
     # Full inference uses requirements.txt on an edge device or a larger service.
+    import cv2
     from cctv_analytics import SentinelApp, Settings
 
     settings = Settings(
