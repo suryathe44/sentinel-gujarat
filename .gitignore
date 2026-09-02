@@ -1,0 +1,17 @@
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Downloaded model weights and generated media
+*.pt
+output/
+*.mp4
+*.avi
+
+# Local configuration and secrets
+.env
+.idea/
+.vscode/
+.DS_Store
