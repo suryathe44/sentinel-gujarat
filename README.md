@@ -146,6 +146,19 @@ Alert/event layer ──► overlay + operator display + optional recording
   encrypt traffic/storage, use role-based access, maintain audit logs, blur faces
   where identification is unnecessary, and keep a human in the loop.
 
+## Deploy the dashboard on Render
+
+The repository includes `Dockerfile`, `render.yaml`, and `web_app.py`. In Render,
+create a Blueprint from this repository. The service exposes `/health`, `/api/status`,
+and a browser dashboard at `/`. Set `VIDEO_SOURCE` as a secret environment variable;
+never commit an RTSP username or password.
+
+The free Render instance is suitable for showing the dashboard with no camera source.
+Continuous YOLO inference needs more memory/CPU, so upgrade the service before setting
+`VIDEO_SOURCE`. Public-cloud RTSP also requires a camera endpoint reachable from the
+internet; for real police deployment, run inference at the camera edge and send only
+alerts to the cloud dashboard.
+
 ## Submission-ready technical summary
 
 **Tech Stack:** Python, OpenCV, Ultralytics YOLOv8n, PyTorch, ByteTrack, NumPy,

@@ -15,3 +15,6 @@ output/
 .idea/
 .vscode/
 .DS_Store
+
+# Render and local runtime data
+*.log

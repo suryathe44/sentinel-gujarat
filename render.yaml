@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: sentinel-gujarat
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: DEVICE
+        value: cpu
+      - key: IMAGE_SIZE
+        value: "416"
+      - key: FRAME_SKIP
+        value: "1"
+      - key: YOLO_MODEL
+        value: yolov8n.pt
+      - key: VIDEO_SOURCE
+        sync: false
