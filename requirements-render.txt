@@ -2,5 +2,3 @@ Flask>=3.0,<4
 gunicorn>=22,<24
 numpy>=1.24,<3
 opencv-python-headless>=4.9,<5
-torch>=2.1
-ultralytics>=8.2,<9

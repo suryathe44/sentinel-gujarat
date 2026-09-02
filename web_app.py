@@ -11,9 +11,6 @@ import cv2
 import numpy as np
 from flask import Flask, Response, jsonify, render_template_string
 
-from cctv_analytics import SentinelApp, Settings
-
-
 app = Flask(__name__)
 state_lock = threading.Lock()
 state = {
@@ -79,6 +76,11 @@ def analytics_worker() -> None:
         with state_lock:
             state.update(status="ready", detail="Waiting for VIDEO_SOURCE")
         return
+
+    # Heavy AI dependencies are imported only when a camera is configured. This
+    # keeps the public control-plane dashboard small enough for Render Free.
+    # Full inference uses requirements.txt on an edge device or a larger service.
+    from cctv_analytics import SentinelApp, Settings
 
     settings = Settings(
         source=source,

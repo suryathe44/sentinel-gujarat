@@ -153,11 +153,12 @@ create a Blueprint from this repository. The service exposes `/health`, `/api/st
 and a browser dashboard at `/`. Set `VIDEO_SOURCE` as a secret environment variable;
 never commit an RTSP username or password.
 
-The free Render instance is suitable for showing the dashboard with no camera source.
-Continuous YOLO inference needs more memory/CPU, so upgrade the service before setting
-`VIDEO_SOURCE`. Public-cloud RTSP also requires a camera endpoint reachable from the
-internet; for real police deployment, run inference at the camera edge and send only
-alerts to the cloud dashboard.
+The free Render instance deploys the lightweight command-center dashboard without
+loading PyTorch. Continuous YOLO inference needs more memory/CPU and the dependencies
+in `requirements.txt`, so use an edge device or a larger inference service before
+setting `VIDEO_SOURCE`. Public-cloud RTSP also requires a camera endpoint reachable
+from the internet; for real police deployment, run inference at the camera edge and
+send only alerts to the cloud dashboard.
 
 ## Submission-ready technical summary
 
