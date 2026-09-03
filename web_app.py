@@ -126,7 +126,7 @@ def analytics_worker() -> None:
             started = time.perf_counter()
             result = engine._infer(frame)
             engine.fps_samples.append(1.0 / max(time.perf_counter() - started, 1e-6))
-            output = engine._draw_result(frame, result, engine._zone_for_frame(frame), time.monotonic())
+            output = engine._draw_result(frame, result, engine._zone_for_frame(frame), engine._analytics_time())
             ok, encoded = cv2.imencode(".jpg", output, [cv2.IMWRITE_JPEG_QUALITY, 78])
             if ok:
                 latest_jpeg = encoded.tobytes()

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import queue
 import signal
 import threading
@@ -17,6 +18,10 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+# The official sandbox is designed for RTSP-over-TCP. Set this before opening
+# any FFmpeg-backed capture; callers can still override it explicitly.
+os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 
 import cv2
 import numpy as np
@@ -61,10 +66,13 @@ class LatestFrameReader:
 
     def __init__(self, source: str) -> None:
         self.source = int(source) if source.isdigit() else source
-        self._frames: queue.Queue[np.ndarray] = queue.Queue(maxsize=1)
+        self._frames: queue.Queue[tuple[np.ndarray, Optional[float], int]] = queue.Queue(maxsize=1)
         self._stop = threading.Event()
         self._capture: Optional[cv2.VideoCapture] = None
         self._thread = threading.Thread(target=self._run, daemon=True)
+        self.latest_pts_seconds: Optional[float] = None
+        self.stream_epoch = 0
+        self._producer_epoch = 0
 
     def start(self) -> "LatestFrameReader":
         self._thread.start()
@@ -76,31 +84,46 @@ class LatestFrameReader:
         return capture
 
     def _run(self) -> None:
+        retry_delay = 2.0
         while not self._stop.is_set():
             self._capture = self._open()
             if not self._capture.isOpened():
-                LOGGER.warning("Cannot open video source; retrying in 2 seconds")
-                time.sleep(2)
+                LOGGER.warning("Cannot open video source; retrying in %.0f seconds", retry_delay)
+                self._stop.wait(retry_delay)
+                retry_delay = min(retry_delay * 2, 30.0)
                 continue
+
+            retry_delay = 2.0
+            previous_pts: Optional[float] = None
 
             while not self._stop.is_set():
                 ok, frame = self._capture.read()
                 if not ok:
                     LOGGER.warning("Video read failed; reconnecting")
                     break
+                pts_ms = float(self._capture.get(cv2.CAP_PROP_POS_MSEC))
+                pts_seconds = pts_ms / 1000.0 if pts_ms > 0 else None
+                if pts_seconds is not None and previous_pts is not None and pts_seconds < previous_pts:
+                    self._producer_epoch += 1
+                    LOGGER.info("Scene/timestamp discontinuity detected; temporal state will reset")
+                previous_pts = pts_seconds if pts_seconds is not None else previous_pts
                 if self._frames.full():
                     try:
                         self._frames.get_nowait()  # discard stale frame
                     except queue.Empty:
                         pass
-                self._frames.put_nowait(frame)
+                self._frames.put_nowait((frame, pts_seconds, self._producer_epoch))
 
             self._capture.release()
-            time.sleep(0.25)
+            self._stop.wait(retry_delay)
+            retry_delay = min(retry_delay * 2, 30.0)
 
     def read(self, timeout: float = 2.0) -> Optional[np.ndarray]:
         try:
-            return self._frames.get(timeout=timeout)
+            frame, pts_seconds, epoch = self._frames.get(timeout=timeout)
+            self.latest_pts_seconds = pts_seconds
+            self.stream_epoch = epoch
+            return frame
         except queue.Empty:
             return None
 
@@ -178,6 +201,7 @@ class PrahariApp:
         self.writer: Optional[cv2.VideoWriter] = None
         self.running = True
         self.fps_samples: deque[float] = deque(maxlen=30)
+        self._last_stream_epoch = 0
         self.telemetry: dict[str, object] = {
             "people": 0, "vehicles": 0, "objects": 0, "alerts": []
         }
@@ -209,6 +233,13 @@ class PrahariApp:
             verbose=False,
         )[0]
         return result
+
+    def _analytics_time(self) -> float:
+        """Use stream PTS for network/file feeds; webcam-only fallback uses monotonic time."""
+        if self.reader.stream_epoch != self._last_stream_epoch:
+            self.anomalies = AnomalyDetector(self.settings)
+            self._last_stream_epoch = self.reader.stream_epoch
+        return self.reader.latest_pts_seconds if self.reader.latest_pts_seconds is not None else time.monotonic()
 
     def _draw_result(self, frame: np.ndarray, result, zone: np.ndarray, now: float) -> np.ndarray:
         people: list[tuple[int, tuple[int, int]]] = []
@@ -287,7 +318,7 @@ class PrahariApp:
                 result = self._infer(frame)
                 elapsed = max(time.perf_counter() - started, 1e-6)
                 self.fps_samples.append(1.0 / elapsed)
-                annotated = self._draw_result(frame, result, self._zone_for_frame(frame), time.monotonic())
+                annotated = self._draw_result(frame, result, self._zone_for_frame(frame), self._analytics_time())
                 self._write(annotated)
 
                 if not self.settings.headless:

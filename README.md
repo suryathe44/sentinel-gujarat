@@ -49,6 +49,20 @@ Finally use the camera's RTSP URL (quote it so shell characters are safe):
 python cctv_analytics.py --source "rtsp://USER:PASSWORD@CAMERA_IP:554/stream1"
 ```
 
+### Official Sentinel sandbox
+
+Discover cameras from the catalogue every time instead of hard-coding stream paths:
+
+```bash
+python sandbox_catalog.py --catalog "http://SANDBOX_HOST/api/ingest"
+python sandbox_catalog.py --catalog "http://SANDBOX_HOST/api/ingest" --camera CAM01
+```
+
+Pass the selected catalogue RTSP URL to `--source`. The reader forces RTSP over
+TCP, tolerates initial decoder warnings, drops stale frames, reconnects with
+exponential backoff (2-30 seconds), and drives temporal analytics from stream PTS.
+When PTS moves backwards at a loop/reboot discontinuity, dwell/crowd state resets.
+
 Press `q` or Escape to quit. Do not put a real RTSP password in source control,
 screenshots, or the submission document.
 
