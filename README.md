@@ -9,6 +9,7 @@ Gujarat Prahari AI accepts a webcam, phone camera stream, video file, or RTSP CC
 - restricted-zone loitering alerts based on a stable track ID and dwell time
 - sudden-crowd alerts based on a short rolling people-count baseline
 - bounding boxes, confidence labels, a bold alert banner, FPS, and optional MP4 recording
+- SQLite-backed camera registry, representative vehicle watchlist, and event-history APIs
 
 > Important: an object class alone is not proof of suspicious intent. Treat these
 > results as decision support for a human operator, not automatic enforcement.
@@ -161,6 +162,18 @@ in `requirements.txt`, so use an edge device or a larger inference service befor
 setting `VIDEO_SOURCE`. Public-cloud RTSP also requires a camera endpoint reachable
 from the internet; for real police deployment, run inference at the camera edge and
 send only alerts to the cloud dashboard.
+
+## Integration APIs
+
+The command service includes functional JSON endpoints for the integration layer:
+
+- `GET /api/cameras` - onboarded camera inventory and health
+- `GET /api/watchlist` - active representative watchlist records
+- `POST /api/watchlist` - add/update a representative registration record
+- `GET /api/events?entity=GJ01AB1234` - alert history and route evidence for an entity
+
+These endpoints deliberately use representative SQLite data. Do not claim live VAHAN,
+eGujCop, AFIS, or NAFIS integration without written API access and authorisation.
 
 ## Submission-ready technical summary
 

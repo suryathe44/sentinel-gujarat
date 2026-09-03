@@ -18,3 +18,5 @@ output/
 
 # Render and local runtime data
 *.log
+data/
+*.db

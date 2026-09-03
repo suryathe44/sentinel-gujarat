@@ -7,10 +7,13 @@ import threading
 import time
 from datetime import datetime, timezone
 
-from flask import Flask, Response, jsonify, render_template_string
+from flask import Flask, Response, jsonify, render_template_string, request
 from PIL import Image, ImageDraw, ImageFont
+from intelligence_store import IntelligenceStore
 
 app = Flask(__name__)
+store = IntelligenceStore(os.getenv("DATABASE_PATH", "/tmp/prahari.db"))
+store.upsert_camera("CAM-01", "Demo Camera", "Police", status="ready")
 state_lock = threading.Lock()
 state = {
     "status": "starting",
@@ -169,6 +172,29 @@ def api_status():
     ensure_worker()
     with state_lock:
         return jsonify(dict(state))
+
+
+@app.get("/api/cameras")
+def api_cameras():
+    return jsonify(store.cameras())
+
+
+@app.route("/api/watchlist", methods=["GET", "POST"])
+def api_watchlist():
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or {}
+        required = ("registration", "category", "reason")
+        if any(not payload.get(field) for field in required):
+            return jsonify(error="registration, category and reason are required"), 400
+        store.add_watchlist(payload["registration"], payload["category"], payload["reason"],
+                            payload.get("severity", "high"))
+        return jsonify(ok=True), 201
+    return jsonify(store.watchlist())
+
+
+@app.get("/api/events")
+def api_events():
+    return jsonify(store.recent_events(request.args.get("limit", 50, type=int), request.args.get("entity")))
 
 
 @app.get("/video_feed")
