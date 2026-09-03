@@ -15,12 +15,13 @@ app = Flask(__name__)
 store = IntelligenceStore(os.getenv("DATABASE_PATH", "/tmp/prahari.db"))
 store.upsert_camera("CAM-01", "Demo Camera", "Police", status="ready")
 state_lock = threading.Lock()
+source_configured = bool(os.getenv("VIDEO_SOURCE"))
 state = {
-    "status": "starting",
-    "detail": "Preparing Gujarat Prahari AI",
+    "status": "starting" if source_configured else "ready",
+    "detail": "Preparing Gujarat Prahari AI" if source_configured else "Waiting for VIDEO_SOURCE",
     "fps": 0.0,
     "last_frame_at": None,
-    "source_configured": bool(os.getenv("VIDEO_SOURCE")),
+    "source_configured": source_configured,
     "people": 0,
     "vehicles": 0,
     "objects": 0,
