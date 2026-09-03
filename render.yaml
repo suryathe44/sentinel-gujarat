@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: sentinel-gujarat
+    name: gujarat-prahari-ai
     runtime: docker
     plan: free
     healthCheckPath: /health

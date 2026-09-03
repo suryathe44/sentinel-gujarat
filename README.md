@@ -1,6 +1,8 @@
-# Sentinel Gujarat — Real-time CCTV Analytics MVP
+# Gujarat Prahari AI — Intelligent Video Analytics & Public Safety Platform
 
-This prototype accepts a webcam, video file, or RTSP stream and provides:
+**Tagline:** *Har Frame Par Nazar, Har Alert Par Tez Action.*
+
+Gujarat Prahari AI accepts a webcam, phone camera stream, video file, or RTSP CCTV feed and provides:
 
 - YOLOv8 detection and ByteTrack tracking for people and vehicles
 - backpack, handbag, and suitcase detection as suspicious-object candidates
@@ -16,7 +18,7 @@ This prototype accepts a webcam, video file, or RTSP stream and provides:
 Python 3.10 or 3.11 is recommended.
 
 ```bash
-cd sentinel_gujarat
+cd sentinel-gujarat
 python -m venv .venv
 source .venv/bin/activate               # Windows: .venv\Scripts\activate
 python -m pip install --upgrade pip
@@ -188,3 +190,10 @@ and retention policies support reliable and responsible control-room deployment.
 - Tracking can reset after long occlusion or an RTSP reconnect, resetting dwell time.
 - Perspective affects crowd counts; camera-specific calibration is essential.
 - This is a hackathon MVP, not a certified autonomous policing system.
+
+## Product identity
+
+- **Product:** Gujarat Prahari AI
+- **Operations UI:** Prahari Command Centre
+- **Purpose:** human-verified public-safety decision support
+- **Tagline:** Har Frame Par Nazar, Har Alert Par Tez Action.

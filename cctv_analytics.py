@@ -1,4 +1,4 @@
-"""Sentinel Gujarat: low-latency CCTV analytics MVP.
+"""Gujarat Prahari AI: low-latency CCTV analytics MVP.
 
 Detects/tracks people, vehicles and unattended-object candidates from a webcam,
 video file, or RTSP stream. It raises visual alerts for restricted-zone
@@ -24,7 +24,7 @@ import torch
 from ultralytics import YOLO
 
 
-LOGGER = logging.getLogger("sentinel")
+LOGGER = logging.getLogger("prahari")
 
 # COCO classes understood by the standard YOLOv8 weights.
 PERSON_CLASS = 0
@@ -165,7 +165,7 @@ class AnomalyDetector:
         return alerts, loitering_ids
 
 
-class SentinelApp:
+class PrahariApp:
     """YOLO inference, anomaly rules, drawing, display and optional recording."""
 
     def __init__(self, settings: Settings) -> None:
@@ -178,6 +178,9 @@ class SentinelApp:
         self.writer: Optional[cv2.VideoWriter] = None
         self.running = True
         self.fps_samples: deque[float] = deque(maxlen=30)
+        self.telemetry: dict[str, object] = {
+            "people": 0, "vehicles": 0, "objects": 0, "alerts": []
+        }
 
     @staticmethod
     def _select_device(requested: str) -> str:
@@ -224,6 +227,12 @@ class SentinelApp:
                     people.append((track_id, ((x1 + x2) // 2, y2)))
 
         alerts, loitering_ids = self.anomalies.evaluate(people, zone, now)
+        self.telemetry = {
+            "people": len(people),
+            "vehicles": sum(class_id in VEHICLE_CLASSES for _, class_id, _, _ in detections),
+            "objects": sum(class_id in SUSPICIOUS_OBJECT_CLASSES for _, class_id, _, _ in detections),
+            "alerts": alerts,
+        }
         overlay = frame.copy()
         cv2.fillPoly(overlay, [zone], (0, 0, 255))
         cv2.addWeighted(overlay, 0.16, frame, 0.84, 0, frame)
@@ -282,7 +291,7 @@ class SentinelApp:
                 self._write(annotated)
 
                 if not self.settings.headless:
-                    cv2.imshow("Sentinel Gujarat - CCTV Analytics", annotated)
+                    cv2.imshow("Gujarat Prahari AI - CCTV Analytics", annotated)
                     if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
                         break
         finally:
@@ -312,7 +321,7 @@ def parse_args() -> Settings:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    app = SentinelApp(parse_args())
+    app = PrahariApp(parse_args())
 
     def request_stop(_signum, _frame) -> None:
         app.running = False
@@ -324,3 +333,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# Backward-compatible import for deployments created before the product rename.
+SentinelApp = PrahariApp
