@@ -19,6 +19,33 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+
+def load_local_env(path: str = ".env") -> None:
+    """Load simple KEY=VALUE entries without requiring python-dotenv.
+
+    Existing exported variables always win. This makes a local `.env` work even
+    when the user runs `source .env` without Bash's `set -a` export mode.
+    """
+    env_path = Path(path)
+    if not env_path.is_file():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if key.startswith("export "):
+            key = key.removeprefix("export ").strip()
+        if value[:1] == value[-1:] and value.startswith(("'", '"')):
+            value = value[1:-1]
+        if key.replace("_", "").isalnum() and not key[0].isdigit():
+            os.environ.setdefault(key, value)
+
+
+load_local_env()
+
 # The official sandbox is designed for RTSP-over-TCP. Set this before opening
 # any FFmpeg-backed capture; callers can still override it explicitly.
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
@@ -479,7 +506,8 @@ class PrahariApp:
 
 def parse_args() -> Settings:
     parser = argparse.ArgumentParser(description="Real-time YOLO CCTV analytics")
-    parser.add_argument("--source", default="0", help="RTSP URL, video path, or webcam index")
+    parser.add_argument("--source", default=os.getenv("VIDEO_SOURCE", "0"),
+                        help="RTSP URL, video path, or webcam index")
     parser.add_argument("--model", default="yolov8n.pt", help="YOLO weights path")
     parser.add_argument("--confidence", type=float, default=0.35)
     parser.add_argument("--image-size", type=int, default=640)

@@ -9,6 +9,7 @@ __pycache__/
 output/
 *.mp4
 *.avi
+config/*.json
 
 # Local configuration and secrets
 .env

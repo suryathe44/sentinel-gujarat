@@ -96,6 +96,9 @@ python cctv_analytics.py --source "$VIDEO_SOURCE" --camera-id CAM01 \
   --display-width 1000 --display-height 600 --output output/final_demo.mp4
 ```
 
+The script also loads `.env` automatically, so dashboard variables work even
+when the shell did not export them. Command-line arguments still take priority.
+
 ### Send edge results to the Render dashboard
 
 Copy `.env.example` values into the local `.env`, keeping the existing private
