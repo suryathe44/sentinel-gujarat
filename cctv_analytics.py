@@ -129,9 +129,13 @@ class LatestFrameReader:
 
     def stop(self) -> None:
         self._stop.set()
-        if self._capture is not None:
-            self._capture.release()
+        # Do not call release() while FFmpeg may be blocked inside read().
+        # Some RTSP backends deadlock when release and read run concurrently.
         self._thread.join(timeout=2)
+        if not self._thread.is_alive() and self._capture is not None:
+            self._capture.release()
+        elif self._thread.is_alive():
+            LOGGER.warning("RTSP reader is still closing; daemon cleanup will finish on exit")
 
 
 class AnomalyDetector:
