@@ -233,7 +233,6 @@ class PrahariApp:
             conf=self.settings.confidence,
             imgsz=self.settings.image_size,
             device=self.device,
-            half=self.device.startswith("cuda"),
             verbose=False,
         )[0]
         return result

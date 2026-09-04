@@ -90,7 +90,8 @@ window. Use a longer loiter time (30–120 seconds) in a real deployment.
 - CPU: use `--device cpu --image-size 416 --frame-skip 1`. YOLOv8n is the best
   starting model; reducing resolution improves speed but may miss small objects.
 - NVIDIA GPU: install the PyTorch build matching the installed CUDA driver, then
-  use `--device cuda:0 --image-size 640`. The script enables FP16 automatically.
+  use `--device cuda:0 --image-size 640`. Ultralytics selects the supported
+  execution optimizations for the installed runtime.
 - Verify CUDA before the demo with:
   `python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"`
 
