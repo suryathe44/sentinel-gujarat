@@ -63,8 +63,11 @@ TCP, tolerates initial decoder warnings, drops stale frames, reconnects with
 exponential backoff (2-30 seconds), and drives temporal analytics from stream PTS.
 When PTS moves backwards at a loop/reboot discontinuity, dwell/crowd state resets.
 
-Press `q` or Escape to quit. Do not put a real RTSP password in source control,
-screenshots, or the submission document.
+The preview automatically fits inside a laptop display while the output recording
+keeps the camera's full resolution. Press `s` to save an annotated evidence image
+under `output/snapshots`. Press `q` or Escape to close the stream and finalize the
+MP4 recording. Do not put a real RTSP password in source control, screenshots, or
+the submission document.
 
 ## 3. Calibrate for the actual camera
 

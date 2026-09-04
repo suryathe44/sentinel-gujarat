@@ -55,6 +55,9 @@ class Settings:
     device: str = "auto"
     output: Optional[str] = None
     headless: bool = False
+    display_width: int = 1100
+    display_height: int = 700
+    snapshots_dir: str = "output/snapshots"
 
 
 class LatestFrameReader:
@@ -206,6 +209,7 @@ class PrahariApp:
         self.running = True
         self.fps_samples: deque[float] = deque(maxlen=30)
         self._last_stream_epoch = 0
+        self._window_ready = False
         self.telemetry: dict[str, object] = {
             "people": 0, "vehicles": 0, "objects": 0, "alerts": []
         }
@@ -305,6 +309,30 @@ class PrahariApp:
             )
         self.writer.write(frame)
 
+    def _display_frame(self, frame: np.ndarray) -> np.ndarray:
+        """Fit the preview inside the laptop display without changing recordings."""
+        height, width = frame.shape[:2]
+        scale = min(
+            self.settings.display_width / width,
+            self.settings.display_height / height,
+            1.0,
+        )
+        if scale >= 1.0:
+            return frame
+        return cv2.resize(
+            frame,
+            (int(width * scale), int(height * scale)),
+            interpolation=cv2.INTER_AREA,
+        )
+
+    def _save_snapshot(self, frame: np.ndarray) -> Path:
+        directory = Path(self.settings.snapshots_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / time.strftime("evidence_%Y%m%d_%H%M%S.jpg")
+        cv2.imwrite(str(path), frame)
+        LOGGER.info("Snapshot saved: %s", path)
+        return path
+
     def run(self) -> None:
         self.reader.start()
         processed = 0
@@ -325,9 +353,16 @@ class PrahariApp:
                 self._write(annotated)
 
                 if not self.settings.headless:
-                    cv2.imshow("Gujarat Prahari AI - CCTV Analytics", annotated)
-                    if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
+                    window_name = "Gujarat Prahari AI - CCTV Analytics"
+                    if not self._window_ready:
+                        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+                        self._window_ready = True
+                    cv2.imshow(window_name, self._display_frame(annotated))
+                    key = cv2.waitKey(1) & 0xFF
+                    if key in (ord("q"), 27):
                         break
+                    if key == ord("s"):
+                        self._save_snapshot(annotated)
         finally:
             self.reader.stop()
             if self.writer is not None:
@@ -350,6 +385,9 @@ def parse_args() -> Settings:
     parser.add_argument("--device", default="auto", help="auto, cpu, cuda:0, ...")
     parser.add_argument("--output", help="Optional annotated MP4 path")
     parser.add_argument("--headless", action="store_true", help="Do not open a display window")
+    parser.add_argument("--display-width", type=int, default=1100, help="Maximum preview width")
+    parser.add_argument("--display-height", type=int, default=700, help="Maximum preview height")
+    parser.add_argument("--snapshots-dir", default="output/snapshots", help="Folder used by the S key")
     return Settings(**vars(parser.parse_args()))
 
 
