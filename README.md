@@ -69,6 +69,44 @@ under `output/snapshots`. Press `q` or Escape to close the stream and finalize t
 MP4 recording. Do not put a real RTSP password in source control, screenshots, or
 the submission document.
 
+### Single-camera operator controls
+
+- `Z`: start drawing a restricted zone; left-click at least three corners, then
+  press Enter to save it in `config/cam01_zone.json`. Press `C` to cancel.
+- `N`: toggle CLAHE low-light enhancement for night footage.
+- `S`: save a manual full-resolution annotated snapshot.
+- `R`: start/stop an annotated session recording.
+- `A`: trigger a short labelled operator-test alert for presentation rehearsal.
+- `Q` or Escape: safely stop, finalize every video, and exit.
+
+Real anomaly alerts automatically create a timestamped directory under
+`output/evidence/` containing `snapshot.jpg` and `evidence.mp4`. An append-only
+`alert_history.jsonl` records camera ID, UTC time, alert type, paths, counts, and
+the initial `pending_review` operator status. Alert confirmation and cooldown
+reduce one-frame false alarms and repeated notifications.
+
+Recommended CAM01 demo command:
+
+```bash
+source .venv/bin/activate
+source .env
+python cctv_analytics.py --source "$VIDEO_SOURCE" --camera-id CAM01 \
+  --device cpu --image-size 320 --confidence 0.30 --loiter-seconds 8 \
+  --alert-confirm-frames 2 --alert-cooldown-seconds 20 \
+  --display-width 1000 --display-height 600 --output output/final_demo.mp4
+```
+
+### Send edge results to the Render dashboard
+
+Copy `.env.example` values into the local `.env`, keeping the existing private
+`VIDEO_SOURCE`. Set `DASHBOARD_URL` to the Render service and generate a long
+random `DASHBOARD_TOKEN`. In Render Environment settings, set `TELEMETRY_TOKEN`
+to exactly the same value. The laptop then sends compressed annotated previews,
+counts, FPS, camera ID, and alert names; raw RTSP credentials never leave the
+edge machine. Leave `RUN_LOCAL_INFERENCE` unset on Render Free. The dashboard's
+**ACKNOWLEDGE ALERT** button suppresses the current alert until it clears or a new
+alert arrives.
+
 ## 3. Calibrate for the actual camera
 
 Edit `_zone_for_frame()` in `cctv_analytics.py`. The four `(x, y)` pairs are

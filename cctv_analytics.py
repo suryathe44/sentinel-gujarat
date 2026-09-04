@@ -27,6 +27,7 @@ import cv2
 import numpy as np
 import torch
 from ultralytics import YOLO
+from safety_features import DashboardPublisher, EvidenceRecorder, ZoneConfig
 
 
 LOGGER = logging.getLogger("prahari")
@@ -58,6 +59,15 @@ class Settings:
     display_width: int = 1100
     display_height: int = 700
     snapshots_dir: str = "output/snapshots"
+    camera_id: str = "CAM01"
+    zone_file: str = "config/cam01_zone.json"
+    evidence_dir: str = "output/evidence"
+    evidence_seconds: float = 10.0
+    alert_confirm_frames: int = 2
+    alert_cooldown_seconds: float = 20.0
+    enhance_low_light: bool = False
+    dashboard_url: Optional[str] = None
+    dashboard_token: Optional[str] = None
 
 
 class LatestFrameReader:
@@ -149,6 +159,16 @@ class AnomalyDetector:
         self.zone_entered_at: dict[int, float] = {}
         self.crowd_history: deque[tuple[float, int]] = deque()
         self.alert_until: defaultdict[str, float] = defaultdict(float)
+        self.condition_frames: defaultdict[str, int] = defaultdict(int)
+        self.last_activated: defaultdict[str, float] = defaultdict(lambda: float("-inf"))
+
+    def _update_alert(self, name: str, condition: bool, now: float) -> None:
+        self.condition_frames[name] = self.condition_frames[name] + 1 if condition else 0
+        confirmed = self.condition_frames[name] >= self.settings.alert_confirm_frames
+        cooldown_over = now - self.last_activated[name] >= self.settings.alert_cooldown_seconds
+        if confirmed and cooldown_over:
+            self.alert_until[name] = now + self.settings.alert_hold_seconds
+            self.last_activated[name] = now
 
     @staticmethod
     def inside_zone(point: tuple[int, int], zone: np.ndarray) -> bool:
@@ -186,10 +206,8 @@ class AnomalyDetector:
             and len(people) - baseline >= self.settings.crowd_jump
         )
 
-        if loitering_ids:
-            self.alert_until["LOITERING IN RESTRICTED ZONE"] = now + self.settings.alert_hold_seconds
-        if sudden_crowd:
-            self.alert_until["SUDDEN CROWD GATHERING"] = now + self.settings.alert_hold_seconds
+        self._update_alert("LOITERING IN RESTRICTED ZONE", bool(loitering_ids), now)
+        self._update_alert("SUDDEN CROWD GATHERING", sudden_crowd, now)
 
         alerts = [name for name, until in self.alert_until.items() if until >= now]
         return alerts, loitering_ids
@@ -206,10 +224,25 @@ class PrahariApp:
         self.anomalies = AnomalyDetector(settings)
         self.reader = LatestFrameReader(settings.source)
         self.writer: Optional[cv2.VideoWriter] = None
+        self.recording_enabled = bool(settings.output)
+        self.recording_path = settings.output
         self.running = True
         self.fps_samples: deque[float] = deque(maxlen=30)
         self._last_stream_epoch = 0
         self._window_ready = False
+        self.zone_config = ZoneConfig(settings.zone_file)
+        self.zone_editing = False
+        self.zone_draft: list[tuple[float, float]] = []
+        self.display_shape: tuple[int, int] = (1, 1)
+        self.night_enabled = settings.enhance_low_light
+        self.manual_alert_until = 0.0
+        self.previous_alerts: set[str] = set()
+        self.evidence = EvidenceRecorder(
+            settings.evidence_dir, settings.camera_id, settings.evidence_seconds
+        )
+        self.publisher = DashboardPublisher(
+            settings.dashboard_url, settings.dashboard_token, settings.camera_id
+        )
         self.telemetry: dict[str, object] = {
             "people": 0, "vehicles": 0, "objects": 0, "alerts": []
         }
@@ -220,12 +253,19 @@ class PrahariApp:
             return requested
         return "cuda:0" if torch.cuda.is_available() else "cpu"
 
+    def _zone_for_frame(self, frame: np.ndarray) -> np.ndarray:
+        if self.zone_editing and len(self.zone_draft) >= 3:
+            height, width = frame.shape[:2]
+            return np.array([(int(x * width), int(y * height)) for x, y in self.zone_draft], np.int32)
+        return self.zone_config.polygon(frame)
+
     @staticmethod
-    def _zone_for_frame(frame: np.ndarray) -> np.ndarray:
-        """Default demo zone; replace normalized points for the real camera."""
-        height, width = frame.shape[:2]
-        normalized = [(0.55, 0.30), (0.95, 0.30), (0.95, 0.92), (0.55, 0.92)]
-        return np.array([(int(x * width), int(y * height)) for x, y in normalized], np.int32)
+    def _enhance_frame(frame: np.ndarray) -> np.ndarray:
+        """Apply CLAHE to luminance for clearer low-light CCTV frames."""
+        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+        light, channel_a, channel_b = cv2.split(lab)
+        light = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(light)
+        return cv2.cvtColor(cv2.merge((light, channel_a, channel_b)), cv2.COLOR_LAB2BGR)
 
     def _infer(self, frame: np.ndarray):
         # ByteTrack supplies stable IDs needed for measuring dwell time.
@@ -265,6 +305,8 @@ class PrahariApp:
                     people.append((track_id, ((x1 + x2) // 2, y2)))
 
         alerts, loitering_ids = self.anomalies.evaluate(people, zone, now)
+        if time.monotonic() < self.manual_alert_until:
+            alerts.append("DEMO ALERT - OPERATOR TEST")
         self.telemetry = {
             "people": len(people),
             "vehicles": sum(class_id in VEHICLE_CLASSES for _, class_id, _, _ in detections),
@@ -294,20 +336,43 @@ class PrahariApp:
             cv2.putText(frame, " | ".join(alerts), (190, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (255, 255, 255), 2)
 
         fps = sum(self.fps_samples) / len(self.fps_samples) if self.fps_samples else 0.0
-        status = f"People: {len(people)}  FPS: {fps:.1f}  Device: {self.device}"
+        status = (f"{self.settings.camera_id}  People:{len(people)}  Vehicles:"
+                  f"{self.telemetry['vehicles']}  FPS:{fps:.1f}  Device:{self.device}")
         cv2.putText(frame, status, (15, frame.shape[0] - 18), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 0), 2)
+        if self.zone_editing:
+            height, width = frame.shape[:2]
+            draft_pixels = [(int(x * width), int(y * height)) for x, y in self.zone_draft]
+            for point in draft_pixels:
+                cv2.circle(frame, point, 7, (0, 255, 255), -1)
+            if len(draft_pixels) >= 2:
+                cv2.polylines(frame, [np.array(draft_pixels, np.int32)], False, (0, 255, 255), 3)
+            cv2.putText(frame, "ZONE EDIT: click points | ENTER save | C cancel", (15, 115),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 255, 255), 2)
         return frame
 
     def _write(self, frame: np.ndarray) -> None:
-        if not self.settings.output:
+        if not self.recording_enabled:
             return
         if self.writer is None:
             height, width = frame.shape[:2]
-            Path(self.settings.output).parent.mkdir(parents=True, exist_ok=True)
+            if not self.recording_path:
+                self.recording_path = time.strftime("output/recording_%Y%m%d_%H%M%S.mp4")
+            Path(self.recording_path).parent.mkdir(parents=True, exist_ok=True)
             self.writer = cv2.VideoWriter(
-                self.settings.output, cv2.VideoWriter_fourcc(*"mp4v"), 20.0, (width, height)
+                self.recording_path, cv2.VideoWriter_fourcc(*"mp4v"), 20.0, (width, height)
             )
+            LOGGER.info("Recording started: %s", self.recording_path)
         self.writer.write(frame)
+
+    def _toggle_recording(self) -> None:
+        self.recording_enabled = not self.recording_enabled
+        if not self.recording_enabled and self.writer is not None:
+            self.writer.release()
+            self.writer = None
+            LOGGER.info("Recording saved: %s", self.recording_path)
+        elif self.recording_enabled:
+            self.recording_path = time.strftime("output/recording_%Y%m%d_%H%M%S.mp4")
+            LOGGER.info("Recording armed; next processed frame starts the file")
 
     def _display_frame(self, frame: np.ndarray) -> np.ndarray:
         """Fit the preview inside the laptop display without changing recordings."""
@@ -324,6 +389,13 @@ class PrahariApp:
             (int(width * scale), int(height * scale)),
             interpolation=cv2.INTER_AREA,
         )
+
+    def _mouse_event(self, event: int, x: int, y: int, _flags: int, _param) -> None:
+        if event != cv2.EVENT_LBUTTONDOWN or not self.zone_editing:
+            return
+        width, height = self.display_shape
+        self.zone_draft.append((max(0.0, min(x / width, 1.0)), max(0.0, min(y / height, 1.0))))
+        LOGGER.info("Zone point added (%d total)", len(self.zone_draft))
 
     def _save_snapshot(self, frame: np.ndarray) -> Path:
         directory = Path(self.settings.snapshots_dir)
@@ -345,26 +417,61 @@ class PrahariApp:
                 if processed % (self.settings.frame_skip + 1):
                     continue
 
+                working_frame = self._enhance_frame(frame) if self.night_enabled else frame
                 started = time.perf_counter()
-                result = self._infer(frame)
+                result = self._infer(working_frame)
                 elapsed = max(time.perf_counter() - started, 1e-6)
                 self.fps_samples.append(1.0 / elapsed)
-                annotated = self._draw_result(frame, result, self._zone_for_frame(frame), self._analytics_time())
+                annotated = self._draw_result(
+                    working_frame, result, self._zone_for_frame(working_frame), self._analytics_time()
+                )
+                current_alerts = set(self.telemetry["alerts"])
+                for alert_name in current_alerts - self.previous_alerts:
+                    self.evidence.start_alert(alert_name, annotated, self.telemetry)
+                self.previous_alerts = current_alerts
+                self.evidence.add_frame(annotated)
+                fps = sum(self.fps_samples) / len(self.fps_samples)
+                self.publisher.publish(self.telemetry, fps, annotated)
                 self._write(annotated)
 
                 if not self.settings.headless:
                     window_name = "Gujarat Prahari AI - CCTV Analytics"
                     if not self._window_ready:
                         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+                        cv2.setMouseCallback(window_name, self._mouse_event)
                         self._window_ready = True
-                    cv2.imshow(window_name, self._display_frame(annotated))
+                    preview = self._display_frame(annotated)
+                    self.display_shape = (preview.shape[1], preview.shape[0])
+                    cv2.imshow(window_name, preview)
                     key = cv2.waitKey(1) & 0xFF
                     if key in (ord("q"), 27):
                         break
                     if key == ord("s"):
                         self._save_snapshot(annotated)
+                    elif key == ord("n"):
+                        self.night_enabled = not self.night_enabled
+                        LOGGER.info("Night enhancement: %s", "ON" if self.night_enabled else "OFF")
+                    elif key == ord("a"):
+                        self.manual_alert_until = time.monotonic() + self.settings.alert_hold_seconds
+                    elif key == ord("r"):
+                        self._toggle_recording()
+                    elif key == ord("z"):
+                        self.zone_editing = True
+                        self.zone_draft = []
+                        LOGGER.info("Zone editor ON: click at least 3 polygon points, then press Enter")
+                    elif key in (10, 13) and self.zone_editing:
+                        if len(self.zone_draft) >= 3:
+                            self.zone_config.save(self.zone_draft)
+                            self.anomalies = AnomalyDetector(self.settings)
+                            self.zone_editing = False
+                        else:
+                            LOGGER.warning("Add at least three points before saving the zone")
+                    elif key == ord("c") and self.zone_editing:
+                        self.zone_editing = False
+                        self.zone_draft = []
         finally:
             self.reader.stop()
+            self.evidence.close()
             if self.writer is not None:
                 self.writer.release()
             cv2.destroyAllWindows()
@@ -388,6 +495,15 @@ def parse_args() -> Settings:
     parser.add_argument("--display-width", type=int, default=1100, help="Maximum preview width")
     parser.add_argument("--display-height", type=int, default=700, help="Maximum preview height")
     parser.add_argument("--snapshots-dir", default="output/snapshots", help="Folder used by the S key")
+    parser.add_argument("--camera-id", default="CAM01", help="Camera ID included in evidence and telemetry")
+    parser.add_argument("--zone-file", default="config/cam01_zone.json", help="Saved restricted-zone polygon")
+    parser.add_argument("--evidence-dir", default="output/evidence", help="Automatic alert evidence folder")
+    parser.add_argument("--evidence-seconds", type=float, default=10.0, help="Alert clip duration")
+    parser.add_argument("--alert-confirm-frames", type=int, default=2, help="Consecutive rule hits required")
+    parser.add_argument("--alert-cooldown-seconds", type=float, default=20.0, help="Repeat alert cooldown")
+    parser.add_argument("--enhance-low-light", action="store_true", help="Start with night enhancement enabled")
+    parser.add_argument("--dashboard-url", default=os.getenv("DASHBOARD_URL"), help="Optional command dashboard URL")
+    parser.add_argument("--dashboard-token", default=os.getenv("DASHBOARD_TOKEN"), help="Optional telemetry bearer token")
     return Settings(**vars(parser.parse_args()))
 
 
