@@ -57,7 +57,7 @@ PAGE = r"""
 <header><div><div class="brand">GUJARAT <span>PRAHARI AI</span></div><div class="sub">INTELLIGENT VIDEO ANALYTICS & PUBLIC SAFETY</div></div><div class="live"><span class="dot"></span>PRAHARI COMMAND CENTRE · <span id="clock">--:--:--</span></div></header>
 <main>
  <div class="grid">
-  <section class="card"><div class="title"><span id="camera">CAM01</span> · LIVE AI ANALYTICS</div><div class="feed"><img src="/video_feed" alt="Analytics stream"></div></section>
+  <section class="card"><div class="title"><span id="camera">CAM01</span> · LIVE AI ANALYTICS</div><div class="feed"><img id="feed-image" src="/latest.jpg" alt="Analytics stream"></div></section>
   <aside class="card side">
    <div class="metric"><div class="label">Service</div><div id="status" class="value warn">STARTING</div></div>
    <div class="metric"><div class="label">Inference FPS</div><div id="fps" class="value">0.0</div></div>
@@ -71,7 +71,12 @@ PAGE = r"""
  <section class="card events"><div class="title">RECENT AI EVENTS</div><div id="events"><div class="event"><span>No alert events recorded</span><span class="ok">MONITORING</span></div></div></section>
  <section class="card architecture"><div class="title">REAL-TIME SAFETY PIPELINE</div><div class="flow"><span class="node">RTSP CCTV</span><span class="arrow">→</span><span class="node">YOLOv8 + ByteTrack</span><span class="arrow">→</span><span class="node">Temporal Rules</span><span class="arrow">→</span><span class="node">Human-Verified Alert</span></div><p class="note">This prototype provides decision support. Alerts must be verified by an authorised operator before action.</p></section>
 </main>
-<script>function tick(){clock.textContent=new Date().toLocaleTimeString('en-IN',{hour12:false})}setInterval(tick,1000);tick();async function acknowledge(){await fetch('/api/acknowledge',{method:'POST'});refresh()}async function refresh(){try{const r=await fetch('/api/status'),s=await r.json();camera.textContent=s.camera_id||'CAM01';status.textContent=s.status.toUpperCase();status.className='value '+(s.status==='running'||s.status==='ready'?'ok':'warn');fps.textContent=Number(s.fps).toFixed(1);detail.textContent=s.detail;people.textContent=s.people||0;vehicles.textContent=s.vehicles||0;objects.textContent=s.objects||0;const active=s.alerts||[];alert.textContent=active.length?active.join(' · '):(s.acknowledged?'ALERT ACKNOWLEDGED':'NO ACTIVE ALERT');alert.className='value '+(active.length?'danger':'ok');if((s.events||[]).length)events.innerHTML=s.events.map(e=>`<div class="event"><span>${e.message}</span><span class="danger">${e.time}</span></div>`).join('')}catch(e){detail.textContent='Status unavailable'}}setInterval(refresh,1500);refresh()</script>
+<script>
+const ui={clock:document.getElementById('clock'),camera:document.getElementById('camera'),status:document.getElementById('status'),fps:document.getElementById('fps'),detail:document.getElementById('detail'),people:document.getElementById('people'),vehicles:document.getElementById('vehicles'),objects:document.getElementById('objects'),alert:document.getElementById('alert'),events:document.getElementById('events'),feed:document.getElementById('feed-image')};
+function tick(){ui.clock.textContent=new Date().toLocaleTimeString('en-IN',{hour12:false})}setInterval(tick,1000);tick();
+async function acknowledge(){await fetch('/api/acknowledge',{method:'POST'});refresh()}
+async function refresh(){try{const r=await fetch('/api/status',{cache:'no-store'}),s=await r.json();ui.camera.textContent=s.camera_id||'CAM01';ui.status.textContent=s.status.toUpperCase();ui.status.className='value '+(s.status==='running'||s.status==='ready'?'ok':'warn');ui.fps.textContent=Number(s.fps).toFixed(1);ui.detail.textContent=s.detail;ui.people.textContent=s.people||0;ui.vehicles.textContent=s.vehicles||0;ui.objects.textContent=s.objects||0;const active=s.alerts||[];ui.alert.textContent=active.length?active.join(' · '):(s.acknowledged?'ALERT ACKNOWLEDGED':'NO ACTIVE ALERT');ui.alert.className='value '+(active.length?'danger':'ok');if((s.events||[]).length)ui.events.innerHTML=s.events.map(e=>`<div class="event"><span>${e.message}</span><span class="danger">${e.time}</span></div>`).join('');if(s.last_frame_at)ui.feed.src='/latest.jpg?t='+Date.now()}catch(e){ui.detail.textContent='Status unavailable'}}setInterval(refresh,1500);refresh();
+</script>
 </body></html>
 """
 
@@ -278,6 +283,17 @@ def video_feed():
             time.sleep(0.12)
 
     return Response(frames(), mimetype="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.get("/latest.jpg")
+def latest_frame():
+    """Proxy-friendly latest-frame endpoint used by the Render dashboard."""
+    ensure_worker()
+    image = latest_jpeg or placeholder_frame("Starting analytics worker...")
+    return Response(image, mimetype="image/jpeg", headers={
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+    })
 
 
 if __name__ == "__main__":
