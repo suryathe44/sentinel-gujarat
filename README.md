@@ -1,271 +1,270 @@
-# Gujarat Prahari AI — Intelligent Video Analytics & Public Safety Platform
+# Gujarat Prahari AI
 
-**Tagline:** *Har Frame Par Nazar, Har Alert Par Tez Action.*
+### Edge-first intelligent CCTV analytics for human-verified public safety
 
-Gujarat Prahari AI accepts a webcam, phone camera stream, video file, or RTSP CCTV feed and provides:
+> **Har Frame Par Nazar, Har Alert Par Tez Action.**
 
-- YOLOv8 detection and ByteTrack tracking for people and vehicles
-- backpack, handbag, and suitcase detection as suspicious-object candidates
-- restricted-zone loitering alerts based on a stable track ID and dwell time
-- sudden-crowd alerts based on a short rolling people-count baseline
-- bounding boxes, confidence labels, a bold alert banner, FPS, and optional MP4 recording
-- SQLite-backed camera registry, representative vehicle watchlist, and event-history APIs
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![YOLOv8](https://img.shields.io/badge/AI-YOLOv8n-00FFFF)](https://docs.ultralytics.com/)
+[![OpenCV](https://img.shields.io/badge/Vision-OpenCV-5C3EE8?logo=opencv&logoColor=white)](https://opencv.org/)
+[![Render](https://img.shields.io/badge/Dashboard-Live-35E58A)](https://sentinel-gujarat.onrender.com/)
 
-> Important: an object class alone is not proof of suspicious intent. Treat these
-> results as decision support for a human operator, not automatic enforcement.
+**Gujarat Prahari AI** is a working single-camera prototype developed for the
+**Gujarat Police Innovation Challenge 2026 (Sentinel Gujarat)**. It consumes an
+authorised live CCTV stream, detects and tracks road users, evaluates temporal
+safety rules, preserves alert evidence, and sends low-bandwidth intelligence to
+a cloud command dashboard.
 
-## 1. Laptop setup
+## [Open Live Command Dashboard](https://sentinel-gujarat.onrender.com/)
+
+## Why this approach
+
+Monitoring every statewide CCTV stream centrally is expensive and creates
+avoidable bandwidth and latency. Prahari uses **selective edge analytics**:
+full-resolution video stays near the camera, while compressed previews, counts,
+health metrics, and alerts flow to the command centre.
+
+The solution uses **Model 1** as the mandatory camera-registry/GIS-ready
+foundation and implements **Model 2 — Unified Viewing and Selective Analytics**
+as its primary solution model.
+
+## Working prototype
+
+| Capability | Status |
+|---|---|
+| Authorised CAM01 RTSP-over-TCP ingest | Verified |
+| Person and vehicle detection | Working |
+| ByteTrack tracking IDs | Working |
+| Restricted-zone loitering rule | Working |
+| Sudden crowd rule | Working |
+| Automatic alert screenshot and clip | Working |
+| Edge-to-cloud annotated preview and telemetry | Working |
+| Operator alert acknowledgement | Working |
+| CPU inference | Observed up to ~9 FPS in one laptop demo run* |
+
+\*Performance depends on hardware, scene, resolution, and encoding; it is not a
+statewide throughput guarantee.
+
+## Key features
+
+- **Real-time detection:** people, bicycles, motorcycles, cars, buses, trucks,
+  backpacks, handbags, and suitcases using YOLOv8n.
+- **Persistent tracking:** ByteTrack IDs support dwell-time measurement.
+- **Temporal alerts:** restricted-zone loitering and sudden crowd growth.
+- **False-alert controls:** consecutive-frame confirmation, alert hold, and
+  repeat cooldown.
+- **Camera calibration:** draw and persist a resolution-independent polygon with
+  the mouse.
+- **Night assistance:** optional CLAHE low-light enhancement.
+- **Evidence workflow:** automatic annotated snapshot, short MP4 clip, UTC event
+  metadata, and append-only JSONL audit history.
+- **Command dashboard:** live annotated preview, counts, inference FPS, alert
+  state, recent events, and operator acknowledgement.
+- **Resilient ingest:** newest-frame buffering, stale-frame dropping,
+  RTSP-over-TCP, reconnect backoff, and timestamp-discontinuity recovery.
+- **Privacy-conscious design:** camera credentials remain at the edge; alerts
+  remain advisory and human verified.
+
+## System architecture
+
+```mermaid
+flowchart LR
+    A[Authorised CCTV / CAM01] -->|RTSP over TCP| B[Latest-frame Edge Reader]
+    B --> C[YOLOv8n Detection]
+    C --> D[ByteTrack IDs]
+    D --> E[Temporal Rules Engine]
+    E --> F{Confirmed event?}
+    F -- Yes --> G[Snapshot + Evidence Clip + Audit Record]
+    F -- No --> H[Continue Monitoring]
+    C --> I[Annotated Operator Preview]
+    E --> I
+    I -->|Compressed JPEG + JSON telemetry| J[Flask Command Dashboard]
+    J --> K[Human Verification / Acknowledge]
+```
+
+```text
+Camera → latest frame → detector → tracker → temporal rules
+       → local evidence + operator overlay → secure dashboard telemetry
+```
+
+## Technology stack
+
+| Layer | Technology |
+|---|---|
+| Language | Python, JavaScript, HTML, CSS, SQL |
+| Detection | Ultralytics YOLOv8n, PyTorch |
+| Tracking | ByteTrack |
+| Video | OpenCV, FFmpeg, RTSP over TCP |
+| Analytics | NumPy, PTS-based temporal rules |
+| Backend | Flask, Gunicorn |
+| Persistence | SQLite, JSONL evidence audit |
+| Deployment | Docker, Render dashboard, edge inference |
+
+## Quick start
 
 Python 3.10 or 3.11 is recommended.
 
 ```bash
+git clone https://github.com/suryathe44/sentinel-gujarat.git
 cd sentinel-gujarat
 python -m venv .venv
-source .venv/bin/activate               # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
+cp .env.example .env
 ```
 
-The first run downloads `yolov8n.pt`. For an offline demo, run it once before
-the event and keep the downloaded weights available.
+Configure `.env` locally. Never commit real credentials:
 
-## 2. Run and test
+```dotenv
+VIDEO_SOURCE=rtsp://encoded-email:password@camera-host:8554/stream/cam01
+DASHBOARD_URL=https://sentinel-gujarat.onrender.com
+DASHBOARD_TOKEN=replace-with-a-long-random-secret
+```
 
-Start with a webcam:
+Run the recommended single-camera CPU demo:
 
 ```bash
-python cctv_analytics.py --source 0 --loiter-seconds 5
+python cctv_analytics.py \
+  --camera-id CAM01 \
+  --device cpu \
+  --image-size 320 \
+  --confidence 0.30 \
+  --loiter-seconds 8 \
+  --alert-confirm-frames 2 \
+  --alert-cooldown-seconds 20 \
+  --display-width 1000 \
+  --display-height 600 \
+  --output output/final_demo.mp4
 ```
 
-Then test a saved video:
+The application loads `.env` automatically. Explicit command-line arguments
+take priority.
+
+### Other inputs
 
 ```bash
-python cctv_analytics.py --source demo.mp4 --output output/demo_result.mp4
+# Laptop webcam
+python cctv_analytics.py --source 0
+
+# Saved footage
+python cctv_analytics.py --source demo.mp4 --output output/result.mp4
+
+# Headless edge execution
+python cctv_analytics.py --headless --device auto
 ```
 
-Finally use the camera's RTSP URL (quote it so shell characters are safe):
+## Operator controls
 
-```bash
-python cctv_analytics.py --source "rtsp://USER:PASSWORD@CAMERA_IP:554/stream1"
-```
+| Key | Action |
+|---|---|
+| `Z` | Start restricted-zone editor |
+| Left click | Add a polygon corner |
+| `Enter` | Save a zone containing at least three points |
+| `C` | Cancel zone editing |
+| `N` | Toggle night enhancement |
+| `S` | Save a manual annotated snapshot |
+| `R` | Start or stop session recording |
+| `A` | Trigger a labelled operator-test alert |
+| `Q` / `Esc` | Finalize videos and exit safely |
 
-### Official Sentinel sandbox
-
-Discover cameras from the catalogue every time instead of hard-coding stream paths:
-
-```bash
-python sandbox_catalog.py --catalog "http://SANDBOX_HOST/api/ingest"
-python sandbox_catalog.py --catalog "http://SANDBOX_HOST/api/ingest" --camera CAM01
-```
-
-Pass the selected catalogue RTSP URL to `--source`. The reader forces RTSP over
-TCP, tolerates initial decoder warnings, drops stale frames, reconnects with
-exponential backoff (2-30 seconds), and drives temporal analytics from stream PTS.
-When PTS moves backwards at a loop/reboot discontinuity, dwell/crowd state resets.
-
-The preview automatically fits inside a laptop display while the output recording
-keeps the camera's full resolution. Press `s` to save an annotated evidence image
-under `output/snapshots`. Press `q` or Escape to close the stream and finalize the
-MP4 recording. Do not put a real RTSP password in source control, screenshots, or
-the submission document.
-
-### Single-camera operator controls
-
-- `Z`: start drawing a restricted zone; left-click at least three corners, then
-  press Enter to save it in `config/cam01_zone.json`. Press `C` to cancel.
-- `N`: toggle CLAHE low-light enhancement for night footage.
-- `S`: save a manual full-resolution annotated snapshot.
-- `R`: start/stop an annotated session recording.
-- `A`: trigger a short labelled operator-test alert for presentation rehearsal.
-- `Q` or Escape: safely stop, finalize every video, and exit.
-
-Real anomaly alerts automatically create a timestamped directory under
-`output/evidence/` containing `snapshot.jpg` and `evidence.mp4`. An append-only
-`alert_history.jsonl` records camera ID, UTC time, alert type, paths, counts, and
-the initial `pending_review` operator status. Alert confirmation and cooldown
-reduce one-frame false alarms and repeated notifications.
-
-Recommended CAM01 demo command:
-
-```bash
-source .venv/bin/activate
-source .env
-python cctv_analytics.py --source "$VIDEO_SOURCE" --camera-id CAM01 \
-  --device cpu --image-size 320 --confidence 0.30 --loiter-seconds 8 \
-  --alert-confirm-frames 2 --alert-cooldown-seconds 20 \
-  --display-width 1000 --display-height 600 --output output/final_demo.mp4
-```
-
-The script also loads `.env` automatically, so dashboard variables work even
-when the shell did not export them. Command-line arguments still take priority.
-
-### Send edge results to the Render dashboard
-
-Copy `.env.example` values into the local `.env`, keeping the existing private
-`VIDEO_SOURCE`. Set `DASHBOARD_URL` to the Render service and generate a long
-random `DASHBOARD_TOKEN`. In Render Environment settings, set `TELEMETRY_TOKEN`
-to exactly the same value. The laptop then sends compressed annotated previews,
-counts, FPS, camera ID, and alert names; raw RTSP credentials never leave the
-edge machine. Leave `RUN_LOCAL_INFERENCE` unset on Render Free. The dashboard's
-**ACKNOWLEDGE ALERT** button suppresses the current alert until it clears or a new
-alert arrives.
-
-## 3. Calibrate for the actual camera
-
-Edit `_zone_for_frame()` in `cctv_analytics.py`. The four `(x, y)` pairs are
-fractions of image width and height, so `(0.55, 0.30)` means 55% from the left
-and 30% from the top. Place them around the restricted area visible in the feed.
-
-Useful demo tuning:
-
-```bash
-python cctv_analytics.py --source demo.mp4 \
-  --loiter-seconds 8 --crowd-min-people 5 --crowd-jump 3 \
-  --crowd-window-seconds 8 --confidence 0.35
-```
-
-The crowd rule fires when the current count is at least `crowd-min-people` and
-has increased by `crowd-jump` relative to the lowest recent count in the rolling
-window. Use a longer loiter time (30–120 seconds) in a real deployment.
-
-## CPU and GPU modes
-
-- Automatic: `--device auto` chooses CUDA when available, otherwise CPU.
-- CPU: use `--device cpu --image-size 416 --frame-skip 1`. YOLOv8n is the best
-  starting model; reducing resolution improves speed but may miss small objects.
-- NVIDIA GPU: install the PyTorch build matching the installed CUDA driver, then
-  use `--device cuda:0 --image-size 640`. Ultralytics selects the supported
-  execution optimizations for the installed runtime.
-- Verify CUDA before the demo with:
-  `python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"`
-
-For a fair FPS test, disable recording because video encoding consumes CPU.
-
-## Four-day build roadmap
-
-### Day 1 — Working detection pipeline
-
-1. Create the environment and test the webcam.
-2. Obtain a legal test RTSP feed from the camera owner and confirm reconnects.
-3. Record two short demo clips: normal activity and a staged violation.
-4. Draw the restricted zone and tune confidence for that camera angle.
-
-### Day 2 — Anomalies and evidence
-
-1. Stage one loitering and one sudden-crowd scenario.
-2. Tune timers/counts and confirm track IDs remain reasonably stable.
-3. Save annotated output clips and collect measured FPS/latency.
-4. Add optional webhook/SMS integration only after the on-screen alerts work.
-
-### Day 3 — Reliability and presentation
-
-1. Run a 30–60 minute soak test and note reconnect behavior and false alerts.
-2. Test low light, partial occlusion, empty scenes, and crowded scenes.
-3. Prepare an architecture slide, a 90-second demo, limitations, and metrics.
-4. Keep a prerecorded result as demo backup if venue networking fails.
-
-### Day 4 — Submission polish
-
-1. Freeze dependencies and back up code, weights, slides, and videos locally.
-2. Rehearse: problem (15s), live detection (30s), alerts (30s), scale/impact (15s).
-3. Clearly state that alerts require human verification and footage retention is controlled.
-4. Submit early, then make only low-risk polish changes.
-
-## Architecture
+Alert artifacts are written to:
 
 ```text
-RTSP cameras
-    │
-    ▼
-Latest-frame reader (per camera; stale frames dropped, reconnect enabled)
-    │
-    ▼
-YOLOv8n detector ──► ByteTrack IDs
-    │                    │
-    ├── people count     ├── zone entry time ──► loitering rule
-    ├── vehicles         └── rolling counts ───► crowd rule
-    └── object candidates
-              │
-              ▼
-Alert/event layer ──► overlay + operator display + optional recording
-              │
-              └── future: API/webhook, database, evidence snapshot, control room
+output/evidence/
+├── alert_history.jsonl
+└── YYYYMMDD_HHMMSS_alert_type/
+    ├── snapshot.jpg
+    └── evidence.mp4
 ```
 
-## Production scaling notes
+Generated video, evidence, model weights, zone calibration, and `.env` secrets
+are excluded from Git.
 
-- Run each camera capture independently so a dead stream cannot block others.
-- On one GPU, batch the newest frame from several cameras into one inference call;
-  benchmark the camera count and enforce a maximum end-to-end latency.
-- Separate ingest, inference, event processing, and dashboard services for a large
-  deployment. Redis Streams/Kafka can carry events; object storage can hold short,
-  encrypted evidence clips according to an approved retention policy.
-- Use camera IDs and timestamps in all events. Add health metrics for input FPS,
-  inference latency, reconnects, queue drops, GPU memory, and alert rate.
-- Replace the demo rules with camera-specific calibrated zones and thresholds.
-  Evaluate precision/recall on consented, locally representative footage.
-- Secure RTSP credentials in a secrets manager, isolate cameras on a network VLAN,
-  encrypt traffic/storage, use role-based access, maintain audit logs, blur faces
-  where identification is unnecessary, and keep a human in the loop.
+## CPU and GPU profiles
 
-## Deploy the dashboard on Render
+```bash
+# Laptop CPU: prioritize responsiveness
+python cctv_analytics.py --device cpu --image-size 320 --frame-skip 0
 
-The repository includes `Dockerfile`, `render.yaml`, and `web_app.py`. In Render,
-create a Blueprint from this repository. The service exposes `/health`, `/api/status`,
-and a browser dashboard at `/`. Set `VIDEO_SOURCE` as a secret environment variable;
-never commit an RTSP username or password.
+# NVIDIA GPU: improve resolution after installing a matching CUDA PyTorch build
+python cctv_analytics.py --device cuda:0 --image-size 640
+```
 
-The free Render instance deploys the lightweight command-center dashboard without
-loading PyTorch. Continuous YOLO inference needs more memory/CPU and the dependencies
-in `requirements.txt`, so use an edge device or a larger inference service before
-setting `VIDEO_SOURCE`. Public-cloud RTSP also requires a camera endpoint reachable
-from the internet; for real police deployment, run inference at the camera edge and
-send only alerts to the cloud dashboard.
+Measure performance on the target hardware and camera scene. Recording and
+night enhancement consume additional CPU.
 
-## Integration APIs
+## Dashboard and APIs
 
-The command service includes functional JSON endpoints for the integration layer:
+The free Render deployment hosts the lightweight control plane; continuous
+YOLO inference runs on the edge machine.
 
-- `GET /api/cameras` - onboarded camera inventory and health
-- `GET /api/watchlist` - active representative watchlist records
-- `POST /api/watchlist` - add/update a representative registration record
-- `GET /api/events?entity=GJ01AB1234` - alert history and route evidence for an entity
+| Endpoint | Purpose |
+|---|---|
+| `GET /health` | Service health |
+| `GET /api/status` | Live camera telemetry and alert state |
+| `POST /api/telemetry` | Edge preview and metrics ingest |
+| `POST /api/acknowledge` | Operator acknowledgement |
+| `GET /api/cameras` | Camera registry |
+| `GET /api/events` | Recent stored events |
+| `GET/POST /api/watchlist` | Representative watchlist adapter |
+| `GET /latest.jpg` | Proxy-friendly latest annotated frame |
 
-These endpoints deliberately use representative SQLite data. Do not claim live VAHAN,
-eGujCop, AFIS, or NAFIS integration without written API access and authorisation.
+For authenticated telemetry, set the same long random value as
+`DASHBOARD_TOKEN` on the edge and `TELEMETRY_TOKEN` in Render. Do not run heavy
+inference on Render Free.
 
-## Submission-ready technical summary
+## Scale path
 
-**Tech Stack:** Python, OpenCV, Ultralytics YOLOv8n, PyTorch, ByteTrack, NumPy,
-RTSP/FFmpeg, and CUDA FP16 acceleration when an NVIDIA GPU is available.
+The MVP deliberately proves one selected camera end to end. A production rollout
+would use one isolated ingest worker per camera, batch newest frames on shared GPU
+workers, and separate ingest, inference, rules, evidence, and dashboard services.
+Redis Streams or Kafka can carry events; encrypted object storage can hold clips
+under an approved retention policy.
 
-**Workflow:** Each CCTV stream is read asynchronously with a latest-frame buffer
-to prevent latency buildup. YOLOv8n detects people, vehicles, and selected object
-candidates; ByteTrack assigns persistent IDs. A temporal rules engine measures
-person dwell time inside a camera-specific polygon and compares live people count
-with a rolling baseline to detect rapid crowd formation. The operator view renders
-confidence-labelled boxes, restricted zones, status metrics, and a high-visibility
-alert banner. Alerts are advisory and remain subject to human verification.
+Operational metrics should include input FPS, inference latency, reconnects,
+dropped frames, GPU memory, end-to-end alert delay, and false-alert rate. Camera
+zones and thresholds must be calibrated independently.
 
-**Scalability:** The MVP uses one independent pipeline per camera. A production
-version can batch the latest frames from multiple cameras on shared GPUs and split
-video ingest, inference, event evaluation, and dashboard delivery into services.
-Bounded latest-frame queues keep latency predictable under load. Centralized health
-metrics, camera-specific calibration, encrypted evidence storage, access controls,
-and retention policies support reliable and responsible control-room deployment.
+## Repository structure
 
-## Honest limitations
+```text
+sentinel-gujarat/
+├── cctv_analytics.py       # Edge detection, tracking, rules, and controls
+├── safety_features.py      # Zones, evidence recorder, dashboard publisher
+├── web_app.py              # Flask command dashboard and APIs
+├── intelligence_store.py   # SQLite registry/watchlist/event adapter
+├── sandbox_catalog.py      # Camera catalogue discovery helper
+├── requirements.txt        # Full edge AI environment
+├── requirements-render.txt # Lightweight dashboard environment
+├── Dockerfile
+├── render.yaml
+└── .env.example
+```
 
-- Standard YOLO weights recognize object categories, not criminal intent, weapons
-  reliably, or a truly unattended bag. Those require curated local data, validation,
-  and temporal association with an owner.
-- Tracking can reset after long occlusion or an RTSP reconnect, resetting dwell time.
-- Perspective affects crowd counts; camera-specific calibration is essential.
-- This is a hackathon MVP, not a certified autonomous policing system.
+## Responsible use and limitations
+
+- Object detection is not proof of suspicious intent. Bags are only object
+  candidates; unattended-object classification requires validated owner-object
+  temporal association.
+- Standard YOLO weights do not reliably identify weapons, faces, number plates,
+  or criminal behaviour.
+- Tracking may reset after long occlusion, hard scene cuts, or reconnection.
+- Perspective, low light, and crowd density affect accuracy; camera-specific
+  evaluation is mandatory.
+- No live VAHAN, eGujCop, AFIS, or NAFIS integration is claimed without written
+  API access and legal authorisation.
+- This hackathon prototype supports trained operators; it is not an autonomous
+  policing or enforcement system.
 
 ## Product identity
 
 - **Product:** Gujarat Prahari AI
-- **Operations UI:** Prahari Command Centre
-- **Purpose:** human-verified public-safety decision support
-- **Tagline:** Har Frame Par Nazar, Har Alert Par Tez Action.
+- **Interface:** Prahari Command Centre
+- **Primary model:** Model 2 — Unified Viewing and Selective Analytics
+- **Foundation:** Model 1 — Centralised CCTV Registry and GIS-ready metadata
+- **Purpose:** Human-verified public-safety decision support
+
+---
+
+Built for the **Gujarat Police Innovation Challenge 2026 — Sentinel Gujarat**.
