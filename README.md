@@ -67,24 +67,37 @@ statewide throughput guarantee.
 
 ## System architecture
 
-```mermaid
-flowchart LR
-    A[Authorised CCTV / CAM01] -->|RTSP over TCP| B[Latest-frame Edge Reader]
-    B --> C[YOLOv8n Detection]
-    C --> D[ByteTrack IDs]
-    D --> E[Temporal Rules Engine]
-    E --> F{Confirmed event?}
-    F -- Yes --> G[Snapshot + Evidence Clip + Audit Record]
-    F -- No --> H[Continue Monitoring]
-    C --> I[Annotated Operator Preview]
-    E --> I
-    I -->|Compressed JPEG + JSON telemetry| J[Flask Command Dashboard]
-    J --> K[Human Verification / Acknowledge]
-```
-
 ```text
-Camera → latest frame → detector → tracker → temporal rules
-       → local evidence + operator overlay → secure dashboard telemetry
+┌──────────────────────────┐
+│ Authorised CCTV / CAM01  │
+└────────────┬─────────────┘
+             │ RTSP over TCP
+             ▼
+┌──────────────────────────┐     ┌──────────────────────────┐
+│ Latest-frame Edge Reader │────▶│ YOLOv8n Object Detection│
+└──────────────────────────┘     └────────────┬─────────────┘
+                                             ▼
+                                ┌──────────────────────────┐
+                                │ ByteTrack Tracking IDs   │
+                                └────────────┬─────────────┘
+                                             ▼
+                                ┌──────────────────────────┐
+                                │ Temporal Safety Rules    │
+                                └──────┬────────────┬──────┘
+                                       │            │
+                              confirmed alert      live view
+                                       ▼            ▼
+                         ┌──────────────────┐  ┌──────────────────┐
+                         │ Evidence + Audit │  │ Operator Overlay │
+                         └────────┬─────────┘  └────────┬─────────┘
+                                  └──────────┬──────────┘
+                                             │ Compressed JPEG + JSON
+                                             ▼
+                                ┌──────────────────────────┐
+                                │ Flask Command Dashboard  │
+                                └────────────┬─────────────┘
+                                             ▼
+                                Human verification / acknowledge
 ```
 
 ## Technology stack
