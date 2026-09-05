@@ -60,6 +60,13 @@ statewide throughput guarantee.
   metadata, and append-only JSONL audit history.
 - **Command dashboard:** live annotated preview, counts, inference FPS, alert
   state, recent events, and operator acknowledgement.
+- **Camera health:** online/offline state, last-frame age, reconnect count,
+  dropped-frame count, and measured inference latency.
+- **Track visualization:** recent movement trails for every active tracked object.
+- **ROI analytics:** optional `--roi-only` mode limits counts and rules to the
+  calibrated restricted polygon.
+- **Incident operations:** Low/Medium/High/Critical severity, camera/date/type
+  filters, evidence gallery, remote thresholds, and CSV/JSON export.
 - **Resilient ingest:** newest-frame buffering, stale-frame dropping,
   RTSP-over-TCP, reconnect backoff, and timestamp-discontinuity recovery.
 - **Privacy-conscious design:** camera credentials remain at the edge; alerts
@@ -220,8 +227,16 @@ YOLO inference runs on the edge machine.
 | `POST /api/acknowledge` | Operator acknowledgement |
 | `GET /api/cameras` | Camera registry |
 | `GET /api/events` | Recent stored events |
+| `GET /api/evidence` | Alert snapshot and clip gallery metadata |
+| `GET /api/incidents.csv` | Filtered incident-report export |
+| `GET/POST /api/settings` | Runtime analytics thresholds |
 | `GET/POST /api/watchlist` | Representative watchlist adapter |
 | `GET /latest.jpg` | Proxy-friendly latest annotated frame |
+
+If telemetry is older than 12 seconds, the dashboard automatically changes the
+camera state to **OFFLINE**. Small alert clips (up to 6 MB) can be relayed to the
+prototype gallery; full-resolution originals remain on the edge. Render Free
+storage is ephemeral, so production evidence must use encrypted object storage.
 
 For authenticated telemetry, set the same long random value as
 `DASHBOARD_TOKEN` on the edge and `TELEMETRY_TOKEN` in Render. Do not run heavy

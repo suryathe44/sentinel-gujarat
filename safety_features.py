@@ -76,6 +76,7 @@ class EvidenceRecorder:
         self.evidence_fps = evidence_fps
         self.pre_frames: deque[np.ndarray] = deque(maxlen=max(1, int(3 * evidence_fps)))
         self.pending: list[PendingClip] = []
+        self.completed: deque[tuple[str, Path]] = deque()
 
     @staticmethod
     def _slug(value: str) -> str:
@@ -134,7 +135,13 @@ class EvidenceRecorder:
         for frame in clip.frames:
             writer.write(frame)
         writer.release()
+        self.completed.append((clip.alert_type, clip.path))
         LOGGER.info("Evidence clip finalized: %s", clip.path)
+
+    def pop_completed(self) -> list[tuple[str, Path]]:
+        items = list(self.completed)
+        self.completed.clear()
+        return items
 
     def close(self) -> None:
         for clip in self.pending:
@@ -146,11 +153,14 @@ class DashboardPublisher:
     """Non-blocking, rate-limited telemetry POST to the command dashboard."""
 
     def __init__(self, url: Optional[str], token: Optional[str], camera_id: str) -> None:
-        self.url = url.rstrip("/") + "/api/telemetry" if url else None
+        self.base_url = url.rstrip("/") if url else None
+        self.url = self.base_url + "/api/telemetry" if self.base_url else None
         self.token = token
         self.camera_id = camera_id
         self.last_sent = 0.0
         self.busy = False
+        self.remote_settings: dict = {}
+        self.clip_busy = False
 
     def publish(self, telemetry: dict, fps: float, frame: Optional[np.ndarray] = None) -> None:
         if not self.url or self.busy or time.monotonic() - self.last_sent < 1.5:
@@ -170,6 +180,30 @@ class DashboardPublisher:
         self.busy = True
         threading.Thread(target=self._send, args=(payload,), daemon=True).start()
 
+    def publish_clip(self, alert_type: str, path: Path) -> None:
+        if not self.base_url or self.clip_busy or not path.exists() or path.stat().st_size > 6_000_000:
+            return
+        self.clip_busy = True
+        threading.Thread(target=self._send_clip, args=(alert_type, path), daemon=True).start()
+
+    def _send_clip(self, alert_type: str, path: Path) -> None:
+        try:
+            headers = {"Content-Type": "application/json"}
+            if self.token:
+                headers["Authorization"] = f"Bearer {self.token}"
+            payload = {"camera_id": self.camera_id, "alert_type": alert_type,
+                       "clip_mp4": base64.b64encode(path.read_bytes()).decode("ascii")}
+            request = urllib.request.Request(
+                self.base_url + "/api/evidence-upload", data=json.dumps(payload).encode(),
+                headers=headers, method="POST"
+            )
+            with urllib.request.urlopen(request, timeout=15):
+                pass
+        except (OSError, urllib.error.URLError) as exc:
+            LOGGER.debug("Dashboard clip upload unavailable: %s", exc)
+        finally:
+            self.clip_busy = False
+
     def _send(self, payload: dict) -> None:
         try:
             headers = {"Content-Type": "application/json"}
@@ -178,8 +212,10 @@ class DashboardPublisher:
             request = urllib.request.Request(
                 self.url, data=json.dumps(payload).encode(), headers=headers, method="POST"
             )
-            with urllib.request.urlopen(request, timeout=3):
-                pass
+            with urllib.request.urlopen(request, timeout=3) as response:
+                body = json.loads(response.read().decode("utf-8"))
+                if isinstance(body.get("settings"), dict):
+                    self.remote_settings = body["settings"]
         except (OSError, urllib.error.URLError) as exc:
             LOGGER.debug("Dashboard telemetry unavailable: %s", exc)
         finally:

@@ -66,7 +66,7 @@ SUSPICIOUS_OBJECT_CLASSES = {24, 26, 28}  # backpack, handbag, suitcase
 DETECTION_CLASSES = sorted({PERSON_CLASS} | VEHICLE_CLASSES | SUSPICIOUS_OBJECT_CLASSES)
 
 
-@dataclass(frozen=True)
+@dataclass
 class Settings:
     """Runtime tuning knobs. Defaults favor a laptop demo."""
 
@@ -95,6 +95,8 @@ class Settings:
     enhance_low_light: bool = False
     dashboard_url: Optional[str] = None
     dashboard_token: Optional[str] = None
+    roi_only: bool = False
+    trail_length: int = 20
 
 
 class LatestFrameReader:
@@ -113,6 +115,10 @@ class LatestFrameReader:
         self.latest_pts_seconds: Optional[float] = None
         self.stream_epoch = 0
         self._producer_epoch = 0
+        self.reconnect_count = 0
+        self.dropped_frames = 0
+        self.last_frame_received: Optional[float] = None
+        self.connected = False
 
     def start(self) -> "LatestFrameReader":
         self._thread.start()
@@ -128,17 +134,22 @@ class LatestFrameReader:
         while not self._stop.is_set():
             self._capture = self._open()
             if not self._capture.isOpened():
+                self.connected = False
+                self.reconnect_count += 1
                 LOGGER.warning("Cannot open video source; retrying in %.0f seconds", retry_delay)
                 self._stop.wait(retry_delay)
                 retry_delay = min(retry_delay * 2, 30.0)
                 continue
 
             retry_delay = 2.0
+            self.connected = True
             previous_pts: Optional[float] = None
 
             while not self._stop.is_set():
                 ok, frame = self._capture.read()
                 if not ok:
+                    self.connected = False
+                    self.reconnect_count += 1
                     LOGGER.warning("Video read failed; reconnecting")
                     break
                 pts_ms = float(self._capture.get(cv2.CAP_PROP_POS_MSEC))
@@ -147,9 +158,11 @@ class LatestFrameReader:
                     self._producer_epoch += 1
                     LOGGER.info("Scene/timestamp discontinuity detected; temporal state will reset")
                 previous_pts = pts_seconds if pts_seconds is not None else previous_pts
+                self.last_frame_received = time.monotonic()
                 if self._frames.full():
                     try:
                         self._frames.get_nowait()  # discard stale frame
+                        self.dropped_frames += 1
                     except queue.Empty:
                         pass
                 self._frames.put_nowait((frame, pts_seconds, self._producer_epoch))
@@ -264,6 +277,10 @@ class PrahariApp:
         self.night_enabled = settings.enhance_low_light
         self.manual_alert_until = 0.0
         self.previous_alerts: set[str] = set()
+        self.trails: defaultdict[int, deque[tuple[int, int]]] = defaultdict(
+            lambda: deque(maxlen=max(2, settings.trail_length))
+        )
+        self.inference_ms = 0.0
         self.evidence = EvidenceRecorder(
             settings.evidence_dir, settings.camera_id, settings.evidence_seconds
         )
@@ -308,6 +325,15 @@ class PrahariApp:
         )[0]
         return result
 
+    def _apply_remote_settings(self) -> None:
+        values = self.publisher.remote_settings
+        if not values:
+            return
+        self.settings.confidence = max(0.1, min(float(values.get("confidence", self.settings.confidence)), 0.9))
+        self.settings.loiter_seconds = max(1.0, min(float(values.get("loiter_seconds", self.settings.loiter_seconds)), 600.0))
+        self.settings.crowd_min_people = max(2, min(int(values.get("crowd_min_people", self.settings.crowd_min_people)), 100))
+        self.settings.crowd_jump = max(1, min(int(values.get("crowd_jump", self.settings.crowd_jump)), 50))
+
     def _analytics_time(self) -> float:
         """Use stream PTS for network/file feeds; webcam-only fallback uses monotonic time."""
         if self.reader.stream_epoch != self._last_stream_epoch:
@@ -327,18 +353,33 @@ class PrahariApp:
             ids = boxes.id.int().cpu().tolist() if boxes.id is not None else [-1] * len(boxes)
             for box, class_id, score, track_id in zip(coordinates, classes, scores, ids):
                 x1, y1, x2, y2 = box
+                foot_point = ((x1 + x2) // 2, y2)
+                if self.settings.roi_only and not AnomalyDetector.inside_zone(foot_point, zone):
+                    continue
                 detections.append((track_id, class_id, score, (x1, y1, x2, y2)))
                 if class_id == PERSON_CLASS and track_id >= 0:
-                    people.append((track_id, ((x1 + x2) // 2, y2)))
+                    people.append((track_id, foot_point))
 
         alerts, loitering_ids = self.anomalies.evaluate(people, zone, now)
         if time.monotonic() < self.manual_alert_until:
             alerts.append("DEMO ALERT - OPERATOR TEST")
+        severity = (
+            "critical" if any("LOITERING" in item for item in alerts)
+            else "high" if alerts
+            else "medium" if any(class_id in SUSPICIOUS_OBJECT_CLASSES for _, class_id, _, _ in detections)
+            else "low"
+        )
         self.telemetry = {
             "people": len(people),
             "vehicles": sum(class_id in VEHICLE_CLASSES for _, class_id, _, _ in detections),
             "objects": sum(class_id in SUSPICIOUS_OBJECT_CLASSES for _, class_id, _, _ in detections),
             "alerts": alerts,
+            "severity": severity,
+            "inference_ms": round(self.inference_ms, 1),
+            "connected": self.reader.connected,
+            "reconnects": self.reader.reconnect_count,
+            "dropped_frames": self.reader.dropped_frames,
+            "roi_only": self.settings.roi_only,
         }
         overlay = frame.copy()
         cv2.fillPoly(overlay, [zone], (0, 0, 255))
@@ -356,6 +397,15 @@ class PrahariApp:
             text = f"{label} {score:.2f} ID:{track_id}" if track_id >= 0 else f"{label} {score:.2f}"
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
             cv2.putText(frame, text, (x1, max(25, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+            if track_id >= 0:
+                center = ((x1 + x2) // 2, (y1 + y2) // 2)
+                self.trails[track_id].append(center)
+                points = np.array(self.trails[track_id], np.int32)
+                if len(points) >= 2:
+                    cv2.polylines(frame, [points], False, color, 2)
+        active_track_ids = {track_id for track_id, _, _, _ in detections if track_id >= 0}
+        for stale_track_id in set(self.trails) - active_track_ids:
+            self.trails.pop(stale_track_id, None)
 
         if alerts:
             cv2.rectangle(frame, (0, 0), (frame.shape[1], 85), (0, 0, 180), -1)
@@ -363,8 +413,10 @@ class PrahariApp:
             cv2.putText(frame, " | ".join(alerts), (190, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (255, 255, 255), 2)
 
         fps = sum(self.fps_samples) / len(self.fps_samples) if self.fps_samples else 0.0
-        status = (f"{self.settings.camera_id}  People:{len(people)}  Vehicles:"
-                  f"{self.telemetry['vehicles']}  FPS:{fps:.1f}  Device:{self.device}")
+        connection = "ONLINE" if self.reader.connected else "RECONNECTING"
+        status = (f"{self.settings.camera_id} {connection} | People:{len(people)} Vehicles:"
+                  f"{self.telemetry['vehicles']} | FPS:{fps:.1f} Latency:{self.inference_ms:.0f}ms "
+                  f"Drops:{self.reader.dropped_frames} Reconnects:{self.reader.reconnect_count}")
         cv2.putText(frame, status, (15, frame.shape[0] - 18), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 0), 2)
         if self.zone_editing:
             height, width = frame.shape[:2]
@@ -445,9 +497,11 @@ class PrahariApp:
                     continue
 
                 working_frame = self._enhance_frame(frame) if self.night_enabled else frame
+                self._apply_remote_settings()
                 started = time.perf_counter()
                 result = self._infer(working_frame)
                 elapsed = max(time.perf_counter() - started, 1e-6)
+                self.inference_ms = elapsed * 1000.0
                 self.fps_samples.append(1.0 / elapsed)
                 annotated = self._draw_result(
                     working_frame, result, self._zone_for_frame(working_frame), self._analytics_time()
@@ -457,6 +511,8 @@ class PrahariApp:
                     self.evidence.start_alert(alert_name, annotated, self.telemetry)
                 self.previous_alerts = current_alerts
                 self.evidence.add_frame(annotated)
+                for alert_type, clip_path in self.evidence.pop_completed():
+                    self.publisher.publish_clip(alert_type, clip_path)
                 fps = sum(self.fps_samples) / len(self.fps_samples)
                 self.publisher.publish(self.telemetry, fps, annotated)
                 self._write(annotated)
@@ -532,6 +588,8 @@ def parse_args() -> Settings:
     parser.add_argument("--enhance-low-light", action="store_true", help="Start with night enhancement enabled")
     parser.add_argument("--dashboard-url", default=os.getenv("DASHBOARD_URL"), help="Optional command dashboard URL")
     parser.add_argument("--dashboard-token", default=os.getenv("DASHBOARD_TOKEN"), help="Optional telemetry bearer token")
+    parser.add_argument("--roi-only", action="store_true", help="Count and alert only inside the restricted zone")
+    parser.add_argument("--trail-length", type=int, default=20, help="Tracked path length in processed frames")
     return Settings(**vars(parser.parse_args()))
 
 

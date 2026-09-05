@@ -112,17 +112,31 @@ class IntelligenceStore:
                 "SELECT * FROM watchlist WHERE active=1 ORDER BY registration"
             )]
 
-    def recent_events(self, limit: int = 50, entity: Optional[str] = None) -> list[dict]:
+    def recent_events(self, limit: int = 50, entity: Optional[str] = None,
+                      camera_id: Optional[str] = None, event_type: Optional[str] = None,
+                      severity: Optional[str] = None, date: Optional[str] = None) -> list[dict]:
         limit = max(1, min(limit, 500))
+        clauses: list[str] = []
+        values: list[object] = []
+        if entity:
+            clauses.append("entity=?")
+            values.append(entity.upper().replace(" ", "").replace("-", ""))
+        if camera_id:
+            clauses.append("camera_id=?")
+            values.append(camera_id)
+        if event_type:
+            clauses.append("event_type=?")
+            values.append(event_type)
+        if severity:
+            clauses.append("severity=?")
+            values.append(severity)
+        if date:
+            clauses.append("substr(occurred_at,1,10)=?")
+            values.append(date)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        values.append(limit)
         with self._connect() as database:
-            if entity:
-                rows = database.execute(
-                    "SELECT * FROM events WHERE entity=? ORDER BY occurred_at DESC LIMIT ?",
-                    (entity.upper().replace(" ", "").replace("-", ""), limit),
-                )
-            else:
-                rows = database.execute(
-                    "SELECT * FROM events ORDER BY occurred_at DESC LIMIT ?", (limit,)
-                )
+            rows = database.execute(
+                f"SELECT * FROM events{where} ORDER BY occurred_at DESC LIMIT ?", values
+            )
             return [dict(row) for row in rows]
-
