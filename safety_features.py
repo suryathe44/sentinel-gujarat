@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import base64
 import logging
+import os
+import re
 import threading
 import time
 import urllib.error
@@ -45,7 +47,11 @@ class ZoneConfig:
     def save(self, points: list[tuple[float, float]]) -> None:
         if len(points) < 3:
             raise ValueError("A restricted zone needs at least three points")
-        self.points = [(max(0.0, min(x, 1.0)), max(0.0, min(y, 1.0))) for x, y in points]
+        normalized = [(max(0.0, min(x, 1.0)), max(0.0, min(y, 1.0))) for x, y in points]
+        polygon = np.array(normalized, dtype=np.float32)
+        if abs(cv2.contourArea(polygon)) < 0.001:
+            raise ValueError("Restricted zone polygon is too small or degenerate")
+        self.points = normalized
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(
             json.dumps({"normalized_points": self.points}, indent=2), encoding="utf-8"
@@ -62,40 +68,49 @@ class PendingClip:
     alert_type: str
     started_at: float
     path: Path
-    frames: list[np.ndarray]
+    frames: list[tuple[float, np.ndarray]]
 
 
 class EvidenceRecorder:
     """Save alert snapshots, short clips and an append-only JSONL audit trail."""
 
     def __init__(self, root: str, camera_id: str, clip_seconds: float = 10.0,
-                 evidence_fps: float = 5.0) -> None:
+                 evidence_fps: float = 5.0, max_width: int = 960) -> None:
         self.root = Path(root)
         self.camera_id = camera_id
         self.clip_seconds = clip_seconds
         self.evidence_fps = evidence_fps
-        self.pre_frames: deque[np.ndarray] = deque(maxlen=max(1, int(3 * evidence_fps)))
+        self.max_width = max_width
+        self.last_sample_at: Optional[float] = None
+        self.pre_frames: deque[tuple[float, np.ndarray]] = deque(
+            maxlen=max(1, int(3 * evidence_fps))
+        )
         self.pending: list[PendingClip] = []
         self.completed: deque[tuple[str, Path]] = deque()
 
     @staticmethod
     def _slug(value: str) -> str:
-        return "_".join(value.lower().replace("/", " ").split())
+        return re.sub(r"[^a-z0-9_-]+", "_", value.lower()).strip("_") or "alert"
 
     def _write_history(self, payload: dict) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         with (self.root / "alert_history.jsonl").open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(payload, ensure_ascii=False) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
 
-    def start_alert(self, alert_type: str, frame: np.ndarray, telemetry: dict) -> Path:
+    def start_alert(self, alert_type: str, frame: np.ndarray, telemetry: dict,
+                    now: float) -> Path:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         event_dir = self.root / f"{stamp}_{self._slug(alert_type)}"
         event_dir.mkdir(parents=True, exist_ok=True)
         snapshot = event_dir / "snapshot.jpg"
-        cv2.imwrite(str(snapshot), frame)
+        if not cv2.imwrite(str(snapshot), frame):
+            raise OSError(f"Could not write evidence snapshot: {snapshot}")
         clip = event_dir / "evidence.mp4"
-        self.pending.append(PendingClip(alert_type, time.monotonic(), clip,
-                                        [item.copy() for item in self.pre_frames]))
+        self.pending.append(PendingClip(
+            alert_type, now, clip, [(pts, item.copy()) for pts, item in self.pre_frames]
+        ))
         self._write_history({
             "camera_id": self.camera_id,
             "alert_type": alert_type,
@@ -108,17 +123,30 @@ class EvidenceRecorder:
         LOGGER.warning("Evidence captured for %s: %s", alert_type, event_dir)
         return snapshot
 
-    def add_frame(self, frame: np.ndarray) -> None:
+    def add_frame(self, frame: np.ndarray, now: float) -> None:
+        sample_interval = 1.0 / max(self.evidence_fps, 1.0)
+        if (
+            self.last_sample_at is not None
+            and now >= self.last_sample_at
+            and now - self.last_sample_at < sample_interval
+        ):
+            return
+        self.last_sample_at = now
         small = frame
         height, width = frame.shape[:2]
-        if width > 1280:
-            scale = 1280 / width
-            small = cv2.resize(frame, (1280, int(height * scale)), interpolation=cv2.INTER_AREA)
-        self.pre_frames.append(small.copy())
-        now = time.monotonic()
+        if width > self.max_width:
+            scale = self.max_width / width
+            small = cv2.resize(
+                frame,
+                (self.max_width, int(height * scale)),
+                interpolation=cv2.INTER_AREA,
+            )
+        self.pre_frames.append((now, small.copy()))
+        while self.pre_frames and now - self.pre_frames[0][0] > 3.0:
+            self.pre_frames.popleft()
         completed: list[PendingClip] = []
         for clip in self.pending:
-            clip.frames.append(small.copy())
+            clip.frames.append((now, small.copy()))
             if now - clip.started_at >= self.clip_seconds:
                 self._save_clip(clip)
                 completed.append(clip)
@@ -128,11 +156,21 @@ class EvidenceRecorder:
     def _save_clip(self, clip: PendingClip) -> None:
         if not clip.frames:
             return
-        height, width = clip.frames[0].shape[:2]
-        writer = cv2.VideoWriter(
-            str(clip.path), cv2.VideoWriter_fourcc(*"mp4v"), self.evidence_fps, (width, height)
+        height, width = clip.frames[0][1].shape[:2]
+        pts_values = [pts for pts, _ in clip.frames]
+        deltas = [b - a for a, b in zip(pts_values, pts_values[1:]) if 0 < b - a < 2]
+        fps = (
+            self.evidence_fps
+            if not deltas
+            else max(1.0, min(30.0, 1.0 / float(np.median(deltas))))
         )
-        for frame in clip.frames:
+        writer = cv2.VideoWriter(
+            str(clip.path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height)
+        )
+        if not writer.isOpened():
+            LOGGER.error("Could not create evidence clip: %s", clip.path)
+            return
+        for _, frame in clip.frames:
             writer.write(frame)
         writer.release()
         self.completed.append((clip.alert_type, clip.path))
@@ -147,6 +185,12 @@ class EvidenceRecorder:
         for clip in self.pending:
             self._save_clip(clip)
         self.pending.clear()
+
+    def handle_discontinuity(self) -> None:
+        """Finalize open clips and clear buffered frames after a PTS reset."""
+        self.close()
+        self.pre_frames.clear()
+        self.last_sample_at = None
 
 
 class DashboardPublisher:
@@ -173,7 +217,11 @@ class DashboardPublisher:
             height, width = preview.shape[:2]
             if width > 800:
                 scale = 800 / width
-                preview = cv2.resize(preview, (800, int(height * scale)), interpolation=cv2.INTER_AREA)
+                preview = cv2.resize(
+                    preview,
+                    (800, int(height * scale)),
+                    interpolation=cv2.INTER_AREA,
+                )
             ok, encoded = cv2.imencode(".jpg", preview, [cv2.IMWRITE_JPEG_QUALITY, 58])
             if ok:
                 payload["frame_jpeg"] = base64.b64encode(encoded).decode("ascii")
@@ -181,7 +229,12 @@ class DashboardPublisher:
         threading.Thread(target=self._send, args=(payload,), daemon=True).start()
 
     def publish_clip(self, alert_type: str, path: Path) -> None:
-        if not self.base_url or self.clip_busy or not path.exists() or path.stat().st_size > 6_000_000:
+        if (
+            not self.base_url
+            or self.clip_busy
+            or not path.exists()
+            or path.stat().st_size > 6_000_000
+        ):
             return
         self.clip_busy = True
         threading.Thread(target=self._send_clip, args=(alert_type, path), daemon=True).start()
@@ -216,7 +269,7 @@ class DashboardPublisher:
                 body = json.loads(response.read().decode("utf-8"))
                 if isinstance(body.get("settings"), dict):
                     self.remote_settings = body["settings"]
-        except (OSError, urllib.error.URLError) as exc:
+        except (OSError, ValueError, json.JSONDecodeError, urllib.error.URLError) as exc:
             LOGGER.debug("Dashboard telemetry unavailable: %s", exc)
         finally:
             self.busy = False

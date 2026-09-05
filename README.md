@@ -35,7 +35,7 @@ as its primary solution model.
 | Authorised CAM01 RTSP-over-TCP ingest | Verified |
 | Person and vehicle detection | Working |
 | ByteTrack tracking IDs | Working |
-| Restricted-zone loitering rule | Working |
+| Person, vehicle, and cargo-object loitering rule | Working |
 | Sudden crowd rule | Working |
 | Automatic alert screenshot and clip | Working |
 | Edge-to-cloud annotated preview and telemetry | Working |
@@ -50,7 +50,8 @@ statewide throughput guarantee.
 - **Real-time detection:** people, bicycles, motorcycles, cars, buses, trucks,
   backpacks, handbags, and suitcases using YOLOv8n.
 - **Persistent tracking:** ByteTrack IDs support dwell-time measurement.
-- **Temporal alerts:** restricted-zone loitering and sudden crowd growth.
+- **Temporal alerts:** PTS-based restricted-zone loitering for people, vehicles,
+  and cargo candidates, plus sudden crowd growth from a rolling baseline.
 - **False-alert controls:** consecutive-frame confirmation, alert hold, and
   repeat cooldown.
 - **Camera calibration:** draw and persist a resolution-independent polygon with
@@ -160,6 +161,12 @@ python cctv_analytics.py \
 
 The application loads `.env` automatically. Explicit command-line arguments
 take priority.
+
+Run the deterministic core checks with:
+
+```bash
+python -m unittest discover -s tests -v
+```
 
 ### Other inputs
 
